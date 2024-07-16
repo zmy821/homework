@@ -30,6 +30,7 @@ func (i *interactiveService) Get(ctx context.Context, biz string, id int64, uid 
 		intr.Liked, er = i.repo.Liked(ctx, biz, id, uid)
 		return er
 	})
+
 	eg.Go(func() error {
 		var er error
 		intr.Collected, er = i.repo.Collected(ctx, biz, id, uid)

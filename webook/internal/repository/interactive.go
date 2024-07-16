@@ -10,6 +10,8 @@ import (
 
 type InteractiveRepository interface {
 	IncrReadCnt(ctx context.Context, biz string, bizId int64) error
+	// BatchIncrReadCnt biz 和 bizId 长度必须一致
+	BatchIncrReadCnt(ctx context.Context, biz []string, bizId []int64) error
 	IncrLike(ctx context.Context, biz string, id int64, uid int64) error
 	DecrLike(ctx context.Context, biz string, id int64, uid int64) error
 	AddCollectionItem(ctx context.Context, biz string, id int64, cid int64, uid int64) error
@@ -24,9 +26,15 @@ type CachedInteractiveRepository struct {
 	l     logger.LoggerV1
 }
 
+func NewCachedInteractiveRepository(dao dao.InteractiveDAO,
+	l logger.LoggerV1,
+	cache cache.InteractiveCache) InteractiveRepository {
+	return &CachedInteractiveRepository{dao: dao, cache: cache}
+}
+
 func (c *CachedInteractiveRepository) Get(ctx context.Context, biz string, id int64) (domain.Interactive, error) {
 	intr, err := c.cache.Get(ctx, biz, id)
-	if err != nil {
+	if err == nil {
 		return intr, nil
 	}
 	ie, err := c.dao.Get(ctx, biz, id)
@@ -57,13 +65,12 @@ func (c *CachedInteractiveRepository) Liked(ctx context.Context,
 		return false, nil
 	default:
 		return false, err
-
 	}
 }
 
 func (c *CachedInteractiveRepository) Collected(ctx context.Context,
 	biz string, id int64, uid int64) (bool, error) {
-	_, err := c.dao.GetCollectedInfo(ctx, biz, id, uid)
+	_, err := c.dao.GetCollectInfo(ctx, biz, id, uid)
 	switch err {
 	case nil:
 		return true, nil
@@ -71,12 +78,11 @@ func (c *CachedInteractiveRepository) Collected(ctx context.Context,
 		return false, nil
 	default:
 		return false, err
-
 	}
 }
 
-func (c *CachedInteractiveRepository) AddCollectionItem(ctx context.Context, biz string,
-	id int64, cid int64, uid int64) error {
+func (c *CachedInteractiveRepository) AddCollectionItem(ctx context.Context,
+	biz string, id int64, cid int64, uid int64) error {
 	err := c.dao.InsertCollectionBiz(ctx, dao.UserCollectionBiz{
 		Biz:   biz,
 		BizId: id,
@@ -86,7 +92,7 @@ func (c *CachedInteractiveRepository) AddCollectionItem(ctx context.Context, biz
 	if err != nil {
 		return err
 	}
-	return c.cache.InsertCollectCntIfPresent(ctx, biz, id)
+	return c.cache.IncrCollectCntIfPresent(ctx, biz, id)
 }
 
 func (c *CachedInteractiveRepository) IncrLike(ctx context.Context, biz string, id int64, uid int64) error {
@@ -105,10 +111,20 @@ func (c *CachedInteractiveRepository) DecrLike(ctx context.Context, biz string, 
 	return c.cache.DecrLikeCntIfPresent(ctx, biz, id)
 }
 
-func NewCachedInteractiveRepository(dao dao.InteractiveDAO,
-	l logger.LoggerV1,
-	cache cache.InteractiveCache) InteractiveRepository {
-	return &CachedInteractiveRepository{dao: dao, cache: cache, l: l}
+func (c *CachedInteractiveRepository) BatchIncrReadCnt(ctx context.Context, biz []string, bizId []int64) error {
+	err := c.dao.BatchIncrReadCnt(ctx, biz, bizId)
+	if err != nil {
+		return err
+	}
+	go func() {
+		for i := 0; i < len(biz); i++ {
+			er := c.cache.IncrReadCntIfPresent(ctx, biz[i], bizId[i])
+			if er != nil {
+				// 记录日志
+			}
+		}
+	}()
+	return nil
 }
 
 func (c *CachedInteractiveRepository) IncrReadCnt(ctx context.Context, biz string, bizId int64) error {
@@ -116,8 +132,8 @@ func (c *CachedInteractiveRepository) IncrReadCnt(ctx context.Context, biz strin
 	if err != nil {
 		return err
 	}
-	//更新缓存
-	//部分失败问题--数据不一致
+	// 你要更新缓存了
+	// 部分失败问题 —— 数据不一致
 	return c.cache.IncrReadCntIfPresent(ctx, biz, bizId)
 }
 
