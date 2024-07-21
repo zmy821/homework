@@ -1,20 +1,39 @@
 package samarax
 
 import (
-	"context"
 	"encoding/json"
 	"gitee.com/geekbang/basic-go/webook/pkg/logger"
 	"github.com/IBM/sarama"
+	"github.com/prometheus/client_golang/prometheus"
+	"strconv"
 	"time"
 )
 
 type BatchHandler[T any] struct {
-	fn func(msgs []*sarama.ConsumerMessage, ts []T) error
-	l  logger.LoggerV1
+	//fn func(msgs []*sarama.ConsumerMessage, ts []T) error
+	l      logger.LoggerV1
+	fn     func(msg *sarama.ConsumerMessage, event T) error
+	vector *prometheus.SummaryVec
 }
 
-func NewBatchHandler[T any](l logger.LoggerV1, fn func(msgs []*sarama.ConsumerMessage, ts []T) error) *BatchHandler[T] {
-	return &BatchHandler[T]{fn: fn, l: l}
+//func NewBatchHandler[T any](l logger.LoggerV1,
+//	fn func(msgs []*sarama.ConsumerMessage, ts []T) error) *BatchHandler[T] {
+//	return &BatchHandler[T]{fn: fn, l: l}
+//}
+
+func NewBatHandler[T any](consumer string,
+	l logger.LoggerV1,
+	fn func(msg *sarama.ConsumerMessage, event T) error) *BatchHandler[T] {
+	vector := prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "saramax1",
+		Subsystem: "consumer_handler",
+		Name:      consumer,
+	}, []string{"topic", "error"})
+	return &BatchHandler[T]{
+		l:      l,
+		fn:     fn,
+		vector: vector,
+	}
 }
 
 func (b *BatchHandler[T]) Setup(session sarama.ConsumerGroupSession) error {
@@ -27,47 +46,82 @@ func (b *BatchHandler[T]) Cleanup(session sarama.ConsumerGroupSession) error {
 
 func (b *BatchHandler[T]) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	msgs := claim.Messages()
-	const batchSize = 10
-	for {
-		batch := make([]*sarama.ConsumerMessage, 0, batchSize)
-		ts := make([]T, 0, batchSize)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		var done = false
-		for i := 0; i < batchSize && !done; i++ {
-			select {
-			case <-ctx.Done():
-				// 超时了
-				done = true
-			case msg, ok := <-msgs:
-				if !ok {
-					cancel()
-					return nil
-				}
-				batch = append(batch, msg)
-				var t T
-				err := json.Unmarshal(msg.Value, &t)
-				if err != nil {
-					b.l.Error("反序列消息体失败",
-						logger.String("topic", msg.Topic),
-						logger.Int32("partition", msg.Partition),
-						logger.Int64("offset", msg.Offset),
-						logger.Error(err))
-					continue
-				}
-				batch = append(batch, msg)
-				ts = append(ts, t)
-			}
-		}
-		cancel()
-		// 凑够了一批，然后你就处理
-		err := b.fn(batch, ts)
-		if err != nil {
-			b.l.Error("处理消息失败",
-				// 把真个 msgs 都记录下来
-				logger.Error(err))
-		}
-		for _, msg := range batch {
-			session.MarkMessage(msg, "")
-		}
+	for msg := range msgs {
+		b.consumeClaim(msg)
+		session.MarkMessage(msg, "")
+	}
+	return nil
+
+}
+
+func (b *BatchHandler[T]) consumeClaim(msg *sarama.ConsumerMessage) {
+	start := time.Now()
+	var err error
+	defer func() {
+		errInfo := strconv.FormatBool(err != nil)
+		duration := time.Since(start).Milliseconds()
+		b.vector.WithLabelValues(msg.Topic, errInfo).Observe(float64(duration))
+	}()
+	var t T
+	err = json.Unmarshal(msg.Value, &t)
+	if err != nil {
+		b.l.Error("反序列消息体失败",
+			logger.String("topic", msg.Topic),
+			logger.Int32("partition", msg.Partition),
+			logger.Int64("offset", msg.Offset),
+			logger.Error(err))
+	}
+	err = b.fn(msg, t)
+	if err != nil {
+		b.l.Error("处理消息失败",
+			logger.String("topic", msg.Topic),
+			logger.Int32("partition", msg.Partition),
+			logger.Int64("offset", msg.Offset),
+			logger.Error(err))
 	}
 }
+
+//msgs := claim.Messages()
+//const batchSize = 10
+//for {
+//	batch := make([]*sarama.ConsumerMessage, 0, batchSize)
+//	ts := make([]T, 0, batchSize)
+//	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+//	var done = false
+//	for i := 0; i < batchSize && !done; i++ {
+//		select {
+//		case <-ctx.Done():
+//			// 超时了
+//			done = true
+//		case msg, ok := <-msgs:
+//			if !ok {
+//				cancel()
+//				return nil
+//			}
+//			batch = append(batch, msg)
+//			var t T
+//			err := json.Unmarshal(msg.Value, &t)
+//			if err != nil {
+//				b.l.Error("反序列消息体失败",
+//					logger.String("topic", msg.Topic),
+//					logger.Int32("partition", msg.Partition),
+//					logger.Int64("offset", msg.Offset),
+//					logger.Error(err))
+//				continue
+//			}
+//			batch = append(batch, msg)
+//			ts = append(ts, t)
+//		}
+//	}
+//	cancel()
+//	// 凑够了一批，然后你就处理
+//	err := b.fn(batch, ts)
+//	if err != nil {
+//		b.l.Error("处理消息失败",
+//			// 把真个 msgs 都记录下来
+//			logger.Error(err))
+//	}
+//	for _, msg := range batch {
+//		session.MarkMessage(msg, "")
+//	}
+//}
