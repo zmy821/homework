@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"gitee.com/geekbang/basic-go/webook/ioc"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -11,11 +13,18 @@ import (
 	"go.uber.org/zap"
 	"log"
 	"net/http"
+	"time"
 )
 
 func main() {
 	initViperV1()
 	initLogger()
+	tpCancel := ioc.InitOTEL()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		tpCancel(ctx)
+	}()
 	app := InitWebServer()
 	initPrometheus()
 	for _, c := range app.consumers {
@@ -33,6 +42,7 @@ func main() {
 	//server.Run(":8081")
 	//server.Run(addr)
 	server.Run(":8080")
+
 }
 
 func initPrometheus() {
