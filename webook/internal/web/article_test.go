@@ -8,6 +8,7 @@ import (
 	"gitee.com/geekbang/basic-go/webook/internal/service"
 	svcmocks "gitee.com/geekbang/basic-go/webook/internal/service/mocks"
 	ijwt "gitee.com/geekbang/basic-go/webook/internal/web/jwt"
+	"gitee.com/geekbang/basic-go/webook/pkg/ginx"
 	"gitee.com/geekbang/basic-go/webook/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ func TestArticleHandler_Publish(t *testing.T) {
 
 		reqBody  string
 		wantCode int
-		wantRes  Result
+		wantRes  ginx.Result
 	}{
 		{
 			name: "新建并且发表成功",
@@ -46,7 +47,7 @@ func TestArticleHandler_Publish(t *testing.T) {
 }
 `,
 			wantCode: 200,
-			wantRes: Result{
+			wantRes: ginx.Result{
 				// 原本是 int64的，但是因为 Data 是any，所以在反序列化的时候，
 				// 用的 float64
 				Data: float64(1),
@@ -74,7 +75,7 @@ func TestArticleHandler_Publish(t *testing.T) {
 }
 `,
 			wantCode: 200,
-			wantRes: Result{
+			wantRes: ginx.Result{
 				// 原本是 int64的，但是因为 Data 是any，所以在反序列化的时候，
 				// 用的 float64
 				Data: float64(1),
@@ -117,7 +118,7 @@ func TestArticleHandler_Publish(t *testing.T) {
 }
 `,
 			wantCode: 200,
-			wantRes: Result{
+			wantRes: ginx.Result{
 				// 原本是 int64的，但是因为 Data 是any，所以在反序列化的时候，
 				// 用的 float64
 				Msg:  "系统错误",
@@ -158,7 +159,7 @@ func TestArticleHandler_Publish(t *testing.T) {
 			if recorder.Code != http.StatusOK {
 				return
 			}
-			var res Result
+			var res ginx.Result
 			err = json.NewDecoder(recorder.Body).Decode(&res)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.wantRes, res)
